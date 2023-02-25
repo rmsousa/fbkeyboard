@@ -1,21 +1,22 @@
 fbkeyboard
 
-This is a framebuffer softkeyboard for use on devices with touchscreen input like smartphones.
+This is a framebuffer softkeyboard for use on devices with touchscreen input like smartphones or raspberry pi TFTs.
 It was designed for the linux text console.
 It uses freetype2 lib to render fonts.
-Keystrokes will be send to the kernel using uinput.
+Keystrokes will be sent to the kernel using uinput.
 
 How to build:
-Just run make in this directory.
+Install the freetype2 library and headers (e.g. "apt install libfreetype-dev")
+Run make in this directory.
 
 How to run:
-# ./fbkeyboard [-h] [-d inputdevice] [-f font] [-r rotation]
+# ./fbkeyboard [-h] [-b framebufferdevice] [-d inputdevice] [-f font] [-r rotation]
+framebufferdevice has to be the device node of the framebuffer, eg: /dev/fb0
 inputdevice has to be the device node of the touchscreen, eg: /dev/input/event1.
-If no inputdevice was given, the first device in /dev/input with absolute axes support will be used.
-font has to be a ttf file. If no font was given, "/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf" will be used.
+If no inputdevice was given, the devices in /dev/input will be tried in readdir order (i.e. arbitrary), and the first one found with absolute axes support will be used.
+font has to be a ttf file. If no font was given, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" will be used.
 rotation is a number between 0-3, 0 = normal, 1 = rotate CW, 2 = rotate 180 degrees, 3 = rotate CCW
 
-Useful tips:
-Use stty to adjust the console size to avoid overlapping the console and the keyboard.
-# stty rows <number-of-rows>
-
+Note:
+For resistive touchscreens, they will very likely require calibration. It is recommended that you install the tslib binaries (e.g. "apt install libts-bin"), run ts_calibrate, run ts_uinput as a daemon, and use the created device as the -d parameter in fbkeyboard. Make sure to set the TSLIB_FBDEVICE and TSLIB_TSDEVICE variables appropriately before running the ts binaries.
+The application tries to resize and restore the console size as appropriate.

@@ -34,8 +34,10 @@
 
 volatile sig_atomic_t done = 0;
 
-char *font = "/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf";
+char *font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 char *device = NULL;
+char *fbdevice = "/dev/fb0";
+int depth = 32;
 char *special[][7] = {
 	{ "Esc", "Tab", "F10", " / ", " - ", " . ", " \\ " },
 	{ "Esc", "Tab", "F10", " ? ", " _ ", " > ", " | " },
@@ -60,15 +62,15 @@ __u16 keys[][26] = {
 	  KEY_MINUS, KEY_EQUAL, KEY_LEFTBRACE, KEY_RIGHTBRACE, KEY_SEMICOLON, KEY_APOSTROPHE, KEY_BACKSLASH, KEY_COMMA, KEY_DOT,
 	  KEY_GRAVE, KEY_SLASH, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M },
 	{ KEY_LEFTSHIFT, KEY_BACKSPACE },
-	{ KEY_LEFTALT, KEY_SPACE, KEY_RIGHTCTRL, KEY_ENTER },
+	{ KEY_LEFTALT, KEY_SPACE, KEY_RIGHTCTRL, KEY_ENTER }/*,
 	{ KEY_HOME, KEY_UP, KEY_PAGEUP,
 	  KEY_LEFT, KEY_ENTER, KEY_RIGHT,
 	  KEY_END, KEY_DOWN, KEY_PAGEDOWN,
-	  KEY_RIGHTSHIFT }
+	  KEY_RIGHTSHIFT }*/
 };
 
-#define TOUCHCOLOR 0x4444ee
-#define BUTTONCOLOR 0x111122
+#define TOUCHCOLOR 0x3f3fdf
+#define BUTTONCOLOR 0x2f2f2f
 #define BACKLITCOLOR 0xff0000
 #define TERMCOLOR 0x000000
 int gap = 2;
@@ -96,10 +98,27 @@ int theight;	// of touchscreen
 int twidth;	// of touchscreen
 int trowh;	// heigth of one keyboard row on touchscreen
 
+u_int16_t gray_to_16bit(int color) {
+      u_int16_t pixel16 = 0;
+      pixel16 |= (color & 0b11111000) << 8;
+      pixel16 |= (color & 0b11111100) << 3;
+      pixel16 |= color >> 3;
+	  return pixel16;
+}
+
+u_int16_t rgb_to_16bit(u_int32_t rgb) {
+      u_int16_t pixel16 = 0;
+
+      pixel16 |= (rgb & 0x00f80000) >> 8;
+      pixel16 |= (rgb & 0x0000fc00) >> 5;
+      pixel16 |= (rgb & 0x000000f8) >> 3;
+	  return pixel16;
+}
+
 void fill_rect(int x, int y, int w, int h, int color)
 {
 	int i, j, t;
-	int32_t *line;
+	char *line;
 	switch (rotate) {
 		case FB_ROTATE_UR:
 			break;
@@ -119,9 +138,13 @@ void fill_rect(int x, int y, int w, int h, int color)
 			break;
 	}
 	for (i = 0; i < h; i++) {
-		line = (int32_t *) (buf + linelength * (y + i));
+		line = (buf + linelength * (y + i));
 		for (j = 0; j < w; j++) {
-			*(line + x + j) = color;
+			if (depth == 16) {
+				*((u_int16_t*) line + x + j) = rgb_to_16bit(color);
+			} else {
+				*((int32_t*) line + x + j) = color;
+			}
 		}
 	}
 }
@@ -184,12 +207,16 @@ void draw_char(int x, int y, char c)
 			    *(face->glyph->bitmap.buffer +
 			      face->glyph->bitmap.pitch * i + j);
 			if (color) {
-				*(buf + linelength * (i + y) +
-				  (j + x) * 4) = color;
-				*(buf + linelength * (i + y) +
-				  (j + x) * 4 + 1) = color;
-				*(buf + linelength * (i + y) +
-				  (j + x) * 4 + 2) = color;
+				if (depth == 16) {
+					*((u_int16_t*)(buf + finfo.line_length*(i+y) + (j+x)*2)) = gray_to_16bit(color);
+				} else {
+					*(buf + linelength * (i + y) +
+					  (j + x) * 4) = color;
+					*(buf + linelength * (i + y) +
+					  (j + x) * 4 + 1) = color;
+					*(buf + linelength * (i + y) +
+					  (j + x) * 4 + 2) = color;
+				}
 			}
 		}
 }
@@ -216,13 +243,13 @@ void draw_key(int x, int y, int w, int h, int color)
 void draw_textbutton(int x, int y, int w, int h, int color, char *text)
 {
 	draw_key(x, y, w, h, color);
-	draw_text(x + gap + 14, y + gap + 24, text);
+	draw_text(x + gap + w/15, y + gap + h/6, text);
 }
 
 void draw_button(int x, int y, int w, int h, int color, char chr)
 {
 	draw_key(x, y, w, h, color);
-	draw_char(x + gap + 7, y + gap + 7, chr);
+	draw_char(x + gap + w/3, y + gap + h/6, chr);
 }
 
 void draw_keyboard(int row, int pressed)
@@ -337,11 +364,13 @@ int check_input_events(int fdinput, int *x, int *y)
 		       && !(ie.type == EV_SYN && ie.code == SYN_REPORT)) {
 			if (ie.type == EV_ABS) {
 				switch (ie.code) {
+					case ABS_X:
 					case ABS_MT_POSITION_X:
 						absolute_x = ie.value;
 						released = 0;
 						key = 0;
 						break;
+					case ABS_Y:
 					case ABS_MT_POSITION_Y:
 						absolute_y = ie.value;
 						released = 0;
@@ -351,6 +380,9 @@ int check_input_events(int fdinput, int *x, int *y)
 						if (ie.value == -1) {
 							released = 1;
 						}
+						break;
+					case ABS_PRESSURE:
+						released = !ie.value;
 						break;
 				}
 			}
@@ -423,12 +455,14 @@ void identify_touched_key(int x, int y, int *row, int *pressed)
 			else
 				*pressed = 3;	// Enter
 			break;
+/*
 		default:
 			*row = 5;		// cursor, Enter, Home, PgDn, etc
 			*pressed = 3 * y / (0x10000 - trowh * 5);
 			*pressed *= 3;
 			*pressed += 3 * x / 0x10000;
 			break;
+*/
 	}
 }
 
@@ -569,8 +603,11 @@ int main(int argc, char *argv[])
 	sigaction(SIGINT, &action, NULL);
 
 	char c;
-	while ((c = getopt(argc, argv, "d:f:r:h")) != (char) -1) {
+	while ((c = getopt(argc, argv, "b:d:f:r:h")) != (char) -1) {
 		switch (c) {
+		case 'b':
+			fbdevice = optarg;
+			break;
 		case 'd':
 			device = optarg;
 			break;
@@ -586,7 +623,7 @@ int main(int argc, char *argv[])
 			}
 			break;
 		case 'h':
-			printf("usage: %s [options]\npossible options are:\n -h: print this help\n -d: set path to inputdevice\n -f: set path to font\n -r: set rotation\n",
+			printf("usage: %s [options]\npossible options are:\n -h: print this help\n -b: set path to framebufferdevice\n -d: set path to inputdevice\n -f: set path to font\n -r: set rotation\n",
 			     argv[0]);
 			exit(0);
 			break;
@@ -597,9 +634,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	fbfd = open("/dev/fb0", O_RDWR);
+	fbfd = open(fbdevice, O_RDWR);
 	if (fbfd == -1) {
-		perror("error: opening framebuffer device /dev/fb0");
+		perror("error: opening framebuffer device");
 		exit(-1);
 	}
 	if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) {
@@ -609,6 +646,10 @@ int main(int argc, char *argv[])
 	if (ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == -1) {
 		perror("error: reading variable framebuffer information");
 		exit(-1);
+	}
+	depth = vinfo.bits_per_pixel;
+	if (depth != 16 && depth != 32) {
+		fprintf(stderr, "unsupported color depth: %d\n", depth);
 	}
 	fbwidth = vinfo.xres;
 	fbheight = vinfo.yres;
@@ -642,7 +683,7 @@ int main(int argc, char *argv[])
 		perror("unable to load font file");
 		exit(-1);
 	}
-	if (FT_Set_Pixel_Sizes(face, height * 1 / 4, height * 1 / 4)) {
+	if (FT_Set_Pixel_Sizes(face, height * 1 / 2, height * 1 / 2)) {
 		perror("FT_Set_Pixel_Sizes failed");
 		exit(-1);
 	}
@@ -678,6 +719,13 @@ int main(int argc, char *argv[])
 	    (ioctl(fdinput, EVIOCGABS(ABS_MT_POSITION_Y), &abs_y) == -1)) {
 		perror("error: getting touchscreen size");
 		exit(-1);
+	}
+	if (abs_x.maximum == 0 || abs_y.maximum == 0) {
+		if ((ioctl(fdinput, EVIOCGABS(ABS_X), &abs_x) == -1) ||
+			(ioctl(fdinput, EVIOCGABS(ABS_Y), &abs_y) == -1)) {
+			perror("error: getting touchscreen size");
+			exit(-1);
+		}
 	}
 	twidth = abs_x.maximum;
 	theight = abs_y.maximum;
